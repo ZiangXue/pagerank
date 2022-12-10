@@ -12,6 +12,12 @@ import csv
 
 import logging
 
+import gensim.downloader
+
+NUM_RELATED_WORDS = 5
+MODEL_NAME="glove-twitter-25"
+HYPER_P = 45
+vector = gensim.downloader.load(MODEL_NAME)
 
 class WebGraph():
 
@@ -176,25 +182,66 @@ class WebGraph():
             #x = x0.squeeze()
             return x.squeeze()
 
-
     def search(self, pi, query='', max_results=10):
         '''
         Logs all urls that match the query.
         Results are displayed in sorted order according to the pagerank vector pi.
         '''
+        
+        terms = query.split()
+        rl = []
+        for term in terms:
+            if term[0] != '-':
+                rl += related_words_and_score(term)
+        
         n = self.P.shape[0]
         vals,indices = torch.topk(pi,n)
+        
+        
+        urls = [self._index_to_url(index.item()) for index in indices]
+        pageranks = [val.item() for val in vals]
+        if query != '':
+            scores = [0 for url in urls]
+            for i, url in enumerate(urls):
+                for word,simscore in rl:
+                    scores[i] += url.count(word) * simscore**HYPER_P
+        else:
+            scores = [1 for url in urls]
+        rankings = [(urls[i],pageranks[i]*scores[i]) for i in range(len(scores))]
+        rankings.sort(key=lambda a: a[1],reverse=True)
+        
+        #print(rankings)
 
         matches = 0
         for i in range(n):
             if matches >= max_results:
                 break
-            index = indices[i].item()
-            url = self._index_to_url(index)
-            pagerank = vals[i].item()
-            if url_satisfies_query(url,query):
-                logging.info(f'rank={matches} pagerank={pagerank:0.4e} url={url}')
+            # index = indices[i].item()
+            # url = self._index_to_url(index)
+            # pagerank = vals[i].item()
+            # if url_satisfies_query(url,query):
+            #     logging.info(f'rank={matches} pagerank={pagerank:0.4e} url={url}')
+            #     matches += 1
+            if url_satisfies_query(rankings[i][0],query):
+                logging.info(f'rank={matches} ranking={rankings[i][1]:0.4e} url={rankings[i][0]}')
                 matches += 1
+
+
+        
+def related_words(term):
+    related_list = vector.most_similar(term)
+    if len(related_list) > NUM_RELATED_WORDS:
+            related_list = related_list[:NUM_RELATED_WORDS]
+    words = [pair[0] for pair in related_list]
+    return words
+
+def related_words_and_score(term):
+    related_list = vector.most_similar(term)
+    if len(related_list) > NUM_RELATED_WORDS:
+            related_list = related_list[:NUM_RELATED_WORDS]
+
+    return related_list
+
 
 
 def url_satisfies_query(url, query):
@@ -230,6 +277,10 @@ def url_satisfies_query(url, query):
             num_terms+=1
             if term in url:
                 satisfies = True
+            else:
+                for word in related_words(term):
+                    if word in url:
+                        satisfies = True
     if num_terms==0:
         satisfies=True
 
